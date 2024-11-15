@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<html>
+<!--
+   A demo of lighting and hierarchical modeling using WebGL.  The basic
+   example has been adapted many times, starting from a Java original,
+   and has a few odd features beacause of that (like use  of the
+   currentColor global variable).
+   There is a sun, with a directional light from the direction of the
+   sun that rotates around the diskworld.  It is turned off at "night"
+   when the sun is below the horizon.
+   There is a lamp at the center that comes on at night.  There is
+   a point light at the location of the light that used attenuation.
+   The car has two headlights, with spotlights that come on at light.
+   Emissive color is used to make the lights seem to glow yellow when
+   they are turned on.
+   There is also a very dim viewpoint light, so never is ever absolutely
+   dark.
+-->
+<head>
+<title>Forry Final Project</title>
+<style>
+    body {
+        background-color: #123456;
+        color: #fff;
+    }
+    label {
+        white-space: pre;
+        margin-left: 25px;
+    }
+</style>
+
+<script type="x-shader/x-vertex" id="vshader-source">
+    attribute vec3 a_coords;
+    attribute vec3 a_normal;
+    uniform mat4 modelview;
+    uniform mat4 projection;
+    varying vec3 v_normal;
+    varying vec3 v_eyeCoords;
+    void main() {
+        vec4 coords = vec4(a_coords,1.0);
+        vec4 eyeCoords = modelview * coords;
+        gl_Position = projection * eyeCoords;
+        v_normal = normalize(a_normal);
+        v_eyeCoords = eyeCoords.xyz/eyeCoords.w;
+    }
+</script>
+
+<script type="x-shader/x-fragment" id="fshader-source">
+    #ifdef GL_FRAGMENT_PRECISION_HIGH
+       precision highp float;
+    #else
+       precision mediump float;
+    #endif
+    struct MaterialProperties {
+        vec4 diffuseColor;      // diffuseColor.a is alpha for the fragment
+        vec3 specularColor;
+        vec3 emissiveColor;
+        float specularExponent;
+    };
+    struct LightProperties {
+        bool enabled;
+        vec4 position;
+        vec3 color;
+        float attenuation;   // Linear attenuation factor, >= 0. Only point lights attenuate.
+        vec3 spotDirection;  // Note: only a point light can be a spotlight
+        float spotCosineCutoff; // if <= 0, this is not a spotlight, if >= 1, the light cone shrinks to nothing
+        float spotExponent;
+    };
+    uniform MaterialProperties material; // do two-sided lighting, but assume front and back materials are the same
+    uniform LightProperties lights[5];
+    uniform mat3 normalMatrix;
+    varying vec3 v_normal;
+    varying vec3 v_eyeCoords;
+    vec3 lightingEquation( LightProperties light, MaterialProperties material, 
+                                vec3 eyeCoords, vec3 N, vec3 V ) {
+           // N is normal vector, V is direction to viewer.
+        vec3 L, R; // Light direction and reflected light direction.
+        float spotFactor = 1.0;  // multiplier to account for spotlight
+        float attenuationFactor = 1.0; // multiplier to account for light attenuation with distance
+        if ( light.position.w == 0.0 ) {
+            L = normalize( light.position.xyz );
+        }
+        else {
+            L = normalize( light.position.xyz/light.position.w - v_eyeCoords );
+            if (light.spotCosineCutoff > 0.0) { // the light is a spotlight
+                vec3 D = -normalize(light.spotDirection);
+                float spotCosine = dot(D,L);
+                if (spotCosine >= light.spotCosineCutoff) { 
+                    spotFactor = pow(spotCosine,light.spotExponent);
+                }
+                else { // The point is outside the cone of light from the spotlight.
+                    spotFactor = 0.0; // The light will add no color to the point.
+                }
+            }
+            if (light.attenuation > 0.0) {
+                float dist = distance(eyeCoords,light.position.xyz/light.position.w);
+                attenuationFactor = 1.0 / (1.0 + dist*light.attenuation);
+            }
+        }
+        if (dot(L,N) <= 0.0) {
+            return vec3(0.0);
+        }
+        vec3 reflection = dot(L,N) * light.color * material.diffuseColor.rgb;
+        R = -reflect(L,N);
+        if (dot(R,V) > 0.0) {
+            float factor = pow(dot(R,V),material.specularExponent);
+            reflection += factor * material.specularColor * light.color;
+        }
+        return spotFactor*attenuationFactor*reflection;
+    }
+    void main() {
+        vec3 normal = normalize( normalMatrix*v_normal );
+        vec3 viewDirection = normalize( -v_eyeCoords);  // (Assumes a perspective projection.)
+        vec3 color = material.emissiveColor;
+        for (int i = 0; i < 5; i++) {
+            if (lights[i].enabled) { 
+                if (gl_FrontFacing) {
+                    color += lightingEquation( lights[i], material, v_eyeCoords,
+                                                    normal, viewDirection);
+                }
+                else {
+                    color += lightingEquation( lights[i], material, v_eyeCoords,
+                                                    -normal, viewDirection);
+                }
+            }
+        }
+        gl_FragColor = vec4(color,material.diffuseColor.a);
+    }
+</script>
+
+<script src="gl-matrix-min.js"></script>
+<script src="trackball-rotator.js"></script>
+<script src="basic-object-models-IFS.js"></script>
+<script src="Project4.js"></script>
+</head>
+<body onload="init()">
+
+<h2>Forry Final Project: Lighting</h2>
+
+<noscript><hr><h3>This page requires Javascript and a web browser that supports WebGL</h3><hr></noscript>
+
+<p id="message" style="font-weight:bold">Drag your mouse on the model to rotate it.<br></p>
+
+<p>
+   <label><input type="checkbox" id="animCheck" onchange="setAnimating(this.checked)">Animate</label>
+   <label><input id="car" type="checkbox" onchange="reset()">Car</label>
+   <label><input id="UFO" type="checkbox" onchange="reset()">UFO</label>
+</p>
+<p>
+   <label style="margin-left: 20px"><input class="form-check-input" id="redSun" type="radio" name="model" onclick="reset()">Red Sunlight</label>
+   <label style="margin-left: 20px"><input class="form-check-input" id="yellowSun" type="radio" name="model" onclick="reset()">Yellow Sunlight</label>
+   <label style="margin-left: 20px"><input class="form-check-input" id="whiteSun" type="radio" name="model" onclick="reset()">White Sunlight</label>
+   <button id="reset" style="margin-left:40px">Reset</button>
+</p>
+
+<div>
+    <canvas width=700 height=700 id="webglcanvas" style="background-color:blue"></canvas>
+</div>
+</body>
+</html>
